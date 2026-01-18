@@ -1,0 +1,110 @@
+import socket
+import threading
+import argparse
+import sys
+from datetime import datetime
+
+RESET = "\033[0m"
+GRAY = "\033[90m"
+GREEN = "\033[92m"
+CYAN = "\033[96m"
+RED = "\033[91m"
+
+def ts():
+    return datetime.now().strftime("%H:%M:%S")
+
+def send(sock, msg):
+    sock.sendall((msg + "\r\n").encode("utf-8"))
+
+class IRCClient:
+    def __init__(self, server, port, nick, channel):
+        self.server = server
+        self.port = port
+        self.nick = nick
+        self.channel = channel
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.connected = False
+
+    def connect(self):
+        self.sock.connect((self.server, self.port))
+        self.connected = True
+        print(f"{GRAY}[{ts()}] Connected to {self.server}:{self.port}{RESET}")
+
+        send(self.sock, f"NICK {self.nick}")
+        send(self.sock, f"USER {self.nick} 0 * :{self.nick}")
+
+        threading.Thread(target=self.listen, daemon=True).start()
+
+    def listen(self):
+        buffer = ""
+        while self.connected:
+            data = self.sock.recv(4096).decode("utf-8", errors="ignore")
+            if not data:
+                break
+
+            buffer += data
+            lines = buffer.split("\r\n")
+            buffer = lines.pop()
+
+            for line in lines:
+                self.handle_server_msg(line)
+
+    def handle_server_msg(self, line):
+        print(f"{GRAY}[{ts()}] {line}{RESET}")
+
+        if line.startswith("PING"):
+            send(self.sock, f"PONG {line.split(' ', 1)[1]}")
+            return
+
+        parts = line.split()
+        if len(parts) >= 4 and parts[1] == "PRIVMSG":
+            sender = parts[0][1:].split("!")[0]
+            msg = line.split(" :", 1)[1]
+            print(f"{CYAN}[{ts()}] <{sender}> {msg}{RESET}")
+
+    def join(self, channel):
+        self.channel = channel
+        send(self.sock, f"JOIN {channel}")
+        print(f"{GREEN}[{ts()}] Joined {channel}{RESET}")
+
+    def send_message(self, msg):
+        if self.channel:
+            send(self.sock, f"PRIVMSG {self.channel} :{msg}")
+            print(f"{GREEN}[{ts()}] <you> {msg}{RESET}")
+
+    def quit(self):
+        send(self.sock, "QUIT :bye")
+        self.connected = False
+        self.sock.close()
+        print(f"{RED}[{ts()}] Disconnected{RESET}")
+        sys.exit(0)
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--server", default="irc.libera.chat")
+    parser.add_argument("--port", type=int, default=6667)
+    parser.add_argument("--nick", required=True)
+    parser.add_argument("--channel", default=None)
+    args = parser.parse_args()
+
+    client = IRCClient(args.server, args.port, args.nick, args.channel)
+    client.connect()
+
+    if args.channel:
+        client.join(args.channel)
+
+    while True:
+        try:
+            user_input = input()
+            if user_input.startswith("/quit"):
+                client.quit()
+            elif user_input.startswith("/join"):
+                _, ch = user_input.split(maxsplit=1)
+                client.join(ch)
+            else:
+                client.send_message(user_input)
+        except KeyboardInterrupt:
+            client.quit()
+            
+if __name__ == "__main__":
+    main()
